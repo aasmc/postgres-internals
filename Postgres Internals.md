@@ -3,25 +3,35 @@
 ## Работа с WAL
 
 ### Выбрать текущий LSN и LSN для следующей вставки
+```sql
 SELECT pg_current_wal_lsn(), pg_current_wal_insert_lsn();
+```
 
 ### Заглянуть в заголовки журнальных записей можно либо утиллитой pg_waldump либо с помощью расширения pg_walinspect
-
+```sql
 CREATE EXTENSION pg_walinspect;
+```
 
 ## Расшрение для просмотра информации о страницах
+```sql
 CREATE EXTENSION pageinspect;
+```
 
 ## Расширение для просмотра информации о плотности распределения данных по страницам таблицы
+```sql
 CREATE EXTENSION pgstattuple;
 
 SELECT * FROM pgstattuple('TABLE_NAME');
 SELECT * FROM pgstatindex('INDEX_NAME');
+```
 
 ## Внутрь буферного кеша позволяет заглянуть расширение
+```sql
 CREATE EXTENSION pg_buffercache;
+```
 
 ### Функция, позволяющая получить буферный кеши, относящиеся к таблице
+```sql
 CREATE FUNCTION buffercache(rel regclass)
 RETURNS TABLE(
 bufferid integer, relfork text, relblk bigint,
@@ -42,9 +52,11 @@ WHERE relfilenode = pg_relation_filenode(rel)
 AND relforknumber = 0 -- только main
 ORDER BY relforknumber, relblocknumber;
 $$ LANGUAGE sql;
+```
 
 ## Запрос, чтобы посмотреть, какая часть таблицы закеширована в буфере и насколько активно используются эти данные:
 
+```sql
 SELECT c.relname,
 count(*) blocks,
 round( 100.0 * 8192 * count(*) /
@@ -62,10 +74,11 @@ AND b.usagecount IS NOT NULL
 GROUP BY c.relname, c.oid
 ORDER BY 2 DESC
 LIMIT 5; 
+```
 
 
 ## Функция для просмотра информации о странице в таблице
-
+```sql
 CREATE FUNCTION heap_page(
 relname text,
 pageno integer
@@ -102,9 +115,11 @@ t_ctid
 FROM heap_page_items(get_raw_page(relname,pageno))
 ORDER BY lp;
 $$ LANGUAGE sql;
+```
 
 ## Функция просмотра информации об индексной странице
 
+```sql
 CREATE FUNCTION index_page(relname text, pageno integer)
 RETURNS TABLE(itemoffset smallint, htid tid)
 AS $$
@@ -112,9 +127,11 @@ SELECT itemoffset,
 htid -- ctid до v.13
 FROM bt_page_items(relname,pageno);
 $$ LANGUAGE sql;
+```
 
 ## Функция для определения текущего значения параметра либо из глобальной настройки, либо из настройки отдельной таблицы:
 
+```sql
 CREATE FUNCTION p(param text, c pg_class) RETURNS float
 AS $$
 SELECT coalesce(
@@ -130,9 +147,10 @@ END || param
 current_setting(param)
 )::float;
 $$ LANGUAGE sql;
+```
 
 ## Представление для хранения информации о таблицах, которые требуют очистки:
-
+```sql
 CREATE VIEW need_vacuum AS
 WITH c AS (
 SELECT c.oid,
@@ -152,9 +170,11 @@ c.ins_threshold + c.ins_scale_factor * c.reltuples AS max_ins_tup,
 st.last_autovacuum
 FROM pg_stat_all_tables st
 JOIN c ON c.oid = st.relid;
+```
 
 ## Представление для хранения информации о таблицах, которые требуют анализа:
 
+```sql
 CREATE VIEW need_analyze AS
 WITH c AS (
 SELECT c.oid,
@@ -170,10 +190,12 @@ c.threshold + c.scale_factor * c.reltuples AS max_mod_tup,
 st.last_autoanalyze
 FROM pg_stat_all_tables st
 JOIN c ON c.oid = st.relid;
+```
 
 ## Функция для отображения диапазона страниц, расшифровки признака заморозки ("f") и показа
 возраста транзакции xmin (используется системная функция age)
 
+```sql
 CREATE FUNCTION heap_page(
 relname text, pageno_from integer, pageno_to integer
 )
@@ -204,6 +226,7 @@ FROM generate_series(pageno_from, pageno_to) p(pageno),
 heap_page_items(get_raw_page(relname, pageno))
 ORDER BY pageno, lp;
 $$ LANGUAGE sql;
+```
 
 
 # Служебные таблицы
