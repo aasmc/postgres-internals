@@ -1,5 +1,44 @@
 # Полезные функции и команды
 
+## Работа с блокировками
+
+Матрица блокировок отношений:
+
+![Matrix of locks.png](art/Matrix%20of%20locks.png)
+
+Получить информацию о блокировках, взятых текущим процессом:
+```sql
+SELECT locktype, virtualxid, mode, granted
+FROM pg_locks WHERE pid = (SELECT pg_backend_pid());
+```
+Представление для просмотра информации о блокировках
+```sql
+CREATE VIEW locks AS
+SELECT pid,
+locktype,
+CASE locktype
+WHEN 'relation' THEN relation::regclass::text
+WHEN 'transactionid' THEN transactionid::text
+WHEN 'virtualxid' THEN virtualxid
+END AS lockid,
+mode,
+granted
+FROM pg_locks
+ORDER BY 1, 2, 3;
+```
+Показать номера процессов, которые стоят в очереди перед указанным и либо удерживают, либо
+запрашивают несовместимую блокировку:
+
+```sql
+SELECT pid,
+       pg_blocking_pids(pid),
+       wait_event_type,
+       state,
+    left(query,50) AS query
+FROM pg_stat_activity
+WHERE pid IN (...)
+```
+
 ## Работа с WAL
 
 ### Выбрать текущий LSN и LSN для следующей вставки
@@ -244,7 +283,8 @@ pg_stat_progress_vacuum
 ## Представление, показывающее прогресс ручного анализа
 pg_stat_progress_analyze
 
-
+## Представление с блокировками
+pg_locks
 
 # Возможные микрооптимизации и советы:
 
