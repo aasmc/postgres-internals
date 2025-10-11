@@ -291,3 +291,169 @@ pg_locks
 1. Еще одна возможная микрооптимизация—перенести в начало таблицы все
 столбцы фиксированного размера, недопускающие неопределенных значений. Доступ к таким полям будет более эффективным благодаря возможности закешировать смещение поля от начала версии строки.
 
+
+# Выполнение запросов
+## Планирование и исполнение
+Посмотреть именованные подготовленные операторы можно в представлении `pg_prepared_statements`.
+
+```sql
+SELECT name, statement, parameter_types
+FROM pg_prepared_statements;
+```
+
+Также в этом представлении есть и статистика выбора планов:
+```sql
+SELECT name, generic_plans, custom_plans
+FROM pg_prepared_statements;
+```
+
+Подготовленные операторы с параметрами первые пять раз всегда оптимизируются с учетом
+фактических значений; при этом вычисляется средняя стоимость частных планов. Начиная с
+шестого раза, если общий план оказывается в среднем выгоднее, чем частные (с учетом того,
+что частные планы необходимо строить каждый раз заново), планировщик запоминает общий план
+и дальше использует его, уже не повторяя оптимизацию. 
+
+При неправильном автоматическом решении можнопринудительно выбрать общий либо частный 
+план,установив соответствующее значение параметра `plan_cache_mode`.
+
+```sql
+SET plan_cache_mode = 'force_custom_plan';
+```
+
+## Статистика
+
+Базовая статистика уровня отношения хранится в таблице `pg_class` системного каталога:
+- reltuples - число строк
+- relpages - размер отношения в страницах
+- relallvisible - количество страниц, отмеченных в карте видимости
+
+```sql
+SELECT reltuples, relpages, relallvisible
+FROM pg_class WHERE relname = 'TABLE_NAME';
+```
+
+Помимо самой простой, базовой статистики на уровне отношений, при анализе собирается
+статистика для каждого столбца отношения. Она хранится в таблице системного каталога
+`pg_statistics`. Но значительно проще пользоваться представлением `pg_stats`, которое 
+показывает информацию в более удобном виде. 
+
+`null_frac` - доля неопределенных значений, вычисленная при анализе
+
+Примерная статистика по количеству строк, в которых для столбца COLUMN_NAME значение = NULL.
+```sql
+SELECT round(reltuples * s.null_frac) AS rows
+FROM pg_class
+JOIN pg_stats s ON s.tablename = relname
+WHERE s.tablename = 'TABLE_NAME'
+AND s.attname = 'COLUMN_NAME';
+```
+
+`n_distinct` - количество уникальных значений в столбце
+
+`most_common_vals` - наиболее часто встречающиеся значения
+
+`most_common_freqs` - частота появления наиболее часто встречающихся значений
+
+```sql
+SELECT most_common_vals AS mcv,
+left(most_common_freqs::text,60) || '...' AS mcf
+FROM pg_stats
+WHERE tablename = 'flights' AND attname = 'aircraft_code' \gx
+
+-[ RECORD 1 ]--------------------------------------------------------
+mcv | {CN1,CR2,SU9,321,733,763,319,773}
+mcf | {0.2778,0.2751,0.26073334,0.057066668,0.0385,0.037233334,0.0...
+```
+
+Для оценки селективности условия «столбец=начение» достаточно найти
+значение в массиве most_common_vals и взять частоту из элемента массива
+most_common_freqs с тем же номером:
+
+```sql
+SELECT round(reltuples * s.most_common_freqs[
+array_position((s.most_common_vals::text::text[]),'733')
+])
+FROM pg_class
+JOIN pg_stats s ON s.tablename = relname
+WHERE s.tablename = 'flights'
+AND s.attname = 'aircraft_code';
+```
+
+Создать расширенную статистику по выражению:
+```sql
+CREATE STATISTICS flights_expr_stat ON (extract(
+month FROM scheduled_departure AT TIME ZONE 'Europe/Moscow'
+))
+FROM flights;
+```
+
+# Индексы
+## Операторы и классы операторов
+
+Класс операторов `text_pattern_ops` позволяет преодолеть ограничение на
+поддержку оператора `~~` (который соответствует конструкции LIKE). В базе данных 
+с правилом сортировки,отличным от C, этот оператор не может использовать обычный
+индекс по текстовому полю. Другое дело — индекс с классом операторов `text_pattern_ops`:
+
+```sql
+=> SELECT datcollate FROM pg_database
+   WHERE datname = current_database();
+datcollate
+−−−−−−−−−−−−−
+en_US.UTF−8
+(1 row)
+=> CREATE INDEX ON tickets(passenger_name);
+=> EXPLAIN (costs off)
+SELECT * FROM tickets WHERE passenger_name LIKE 'ELENA%';
+
+QUERY PLAN
+−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−
+Seq Scan on tickets
+Filter: (passenger_name ~~ 'ELENA%'::text)
+(2 rows)
+
+=> CREATE INDEX tickets_passenger_name_pattern_idx
+ON tickets(passenger_name text_pattern_ops);
+=> EXPLAIN (costs off)
+SELECT * FROM tickets WHERE passenger_name LIKE 'ELENA%';
+QUERY PLAN
+−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−
+Bitmap Heap Scan on tickets
+Filter: (passenger_name ~~ 'ELENA%'::text)
+−> Bitmap Index Scan on tickets_passenger_name_pattern_idx
+Index Cond: ((passenger_name ~>=~ 'ELENA'::text) AND
+(passenger_name ~<~ 'ELENB'::text))
+(5 rows)
+```
+
+## Индекс по выражению:
+```sql
+=> CREATE INDEX ON tickets( (initcap(passenger_name)) );
+=> EXPLAIN (costs off)
+SELECT * FROM tickets WHERE initcap(passenger_name) = 'Elena Belova';
+QUERY PLAN
+−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−
+Bitmap Heap Scan on tickets
+Recheck Cond: (initcap(passenger_name) = 'Elena Belova'::text)
+−> Bitmap Index Scan on tickets_initcap_idx
+Index Cond: (initcap(passenger_name) = 'Elena Belova'::text)
+(4 rows)
+```
+
+## Свойства индекса:
+```sql
+SELECT p.name, pg_index_has_property('seats_pkey', p.name)
+FROM unnest(array[
+'clusterable', 'index_scan', 'bitmap_scan', 'backward_scan'
+]) p(name);
+```
+
+## Свойства столбцов:
+```sql
+SELECT p.name,
+pg_index_column_has_property('seats_pkey', 1, p.name)
+FROM unnest(array[
+'asc', 'desc', 'nulls_first', 'nulls_last', 'orderable',
+'distance_orderable', 'returnable', 'search_array', 'search_nulls'
+]) p(name);
+```
