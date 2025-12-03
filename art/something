@@ -1,0 +1,91 @@
+@startuml
+autonumber
+
+actor U as "User"
+participant "Browser\n(Cute ID Front)" as B
+participant "Cute ID Backend\n(CIB)" as CIB
+participant "MC Discovery Service\n(MCD)" as MCD
+participant "CuteMobile MC Backend\n(MC IdP)" as CMIDP
+participant "CuteMobile Core\n(Mobile Network)" as CORE
+
+== 1. Открытие страницы логина ==
+U -> B: Открыть https://id.cute.com/login
+B -> CIB: HTTPS GET /login
+CIB --> B: HTML + JS формы логина
+
+== 2. Фронт спрашивает: можно ли автоподставить номер? ==
+B -> CIB: HTTPS XHR GET /api/phone/autofill/init
+
+note right of CIB
+  Бэкенд достаёт IP пользователя:
+    clientIp = X-Forwarded-For / remoteAddr
+end note
+
+== 3. Discovery оператора по Mobile Connect ==
+CIB -> MCD: HTTPS GET /mc/discovery\n?ip=clientIp&client_id=cute-id
+
+alt Оператор определён и поддерживает MC Identity
+  MCD --> CIB: 200 OK
+  note left of CIB
+    Пример ответа Discovery:
+    {
+      "operator_id": "CuteMobile",
+      "operator_name": "Cute Mobile",
+      "mc_identity_endpoint": "https://mcid.cute-mobile.com/identity",
+      "mc_identity_supported": true
+    }
+  end note
+
+  CIB -> CIB: Проверить, что CuteMobile\nесть в списке поддержанных операторов
+
+  == 4. Back-to-back Mobile Connect Identity ==
+  CIB -> CMIDP: HTTPS POST /identity
+  note right of CMIDP
+    Параметры (пример):
+      client_id = <cute-id-client>
+      client_secret = <secret>
+      login_hint = ip:clientIp
+      scope = mc_identity_phonenumber
+  end note
+
+  CMIDP -> CORE: internal: найти абонента\nпо IP/сессии → MSISDN
+  CORE --> CMIDP: msisdn = +7XXXXXXXXXX
+
+  CMIDP --> CIB: 200 OK
+  note left of CIB
+    Пример ответа:
+    {
+      "sub": "user-session-id",
+      "phone_number": "+7XXXXXXXXXX",
+      "phone_number_verified": true
+    }
+  end note
+
+  CIB -> CIB: Валидировать ответ MC (подпись/JWT),\nмаскировать номер и сохранить в сессии
+
+  CIB --> B: 200 OK
+  note left of B
+    { "autofillAvailable": true }
+  end note
+
+  == 5. Фронт запрашивает сам номер ==
+  B -> CIB: HTTPS GET /api/phone/autofill/value
+  CIB -> CIB: Достать маскированный номер из сессии
+  CIB --> B: 200 OK
+  note left of B
+    { "msisdnMasked": "+7 *** ***-12-34" }
+  end note
+
+  B -> U: Авто-подставить номер\nв форму ввода телефона
+
+else Оператор не определён или не поддерживается
+  MCD --> CIB: 404 / { "operator_id": null } или\nmc_identity_supported=false
+  CIB --> B: 200 OK
+  note left of B
+    { "autofillAvailable": false }
+  end note
+
+  B -> U: Показать обычную форму\nввода номера телефона
+end
+
+@enduml
