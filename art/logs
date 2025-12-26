@@ -27,3 +27,15 @@ FROM logs-*
 | WHERE first_A_time IS NOT NULL
 | EVAL valid_B_calls = B_calls
 | STATS total_B_calls = SUM(valid_B_calls)
+
+FROM logs-*
+| WHERE @timestamp >= NOW() - 10 DAYS
+| WHERE (
+    (service == "A" AND output_url == "https://url.com") OR
+    (service == "B" AND output_url == "https://url2.com")
+  )
+| EVAL a_seen = CASE(service == "A" AND output_url == "https://url.com", 1, 0)
+| EVAL b_call = CASE(service == "B" AND output_url == "https://url2.com", 1, 0)
+| STATS a_cnt = SUM(a_seen), b_cnt = SUM(b_call) BY process_id
+| WHERE a_cnt > 0 AND b_cnt > 0
+| SORT b_cnt DESC
