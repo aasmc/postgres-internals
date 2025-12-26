@@ -9,3 +9,21 @@ POST logs-*/_eql/search
       [ any where service == "B" and output_url == "https://url2.com" ]
   """
 }
+
+FROM logs-*
+| WHERE @timestamp >= NOW() - 10 DAYS
+| WHERE (
+    (service == "A" AND output_url == "https://url.com")
+    OR
+    (service == "B" AND output_url == "https://url2.com")
+  )
+| SORT process_id, @timestamp
+| EVAL is_A = service == "A" AND output_url == "https://url.com"
+| EVAL is_B = service == "B" AND output_url == "https://url2.com"
+| STATS
+    first_A_time = MIN(@timestamp, is_A),
+    B_calls = COUNT(*, is_B)
+  BY process_id
+| WHERE first_A_time IS NOT NULL
+| EVAL valid_B_calls = B_calls
+| STATS total_B_calls = SUM(valid_B_calls)
