@@ -1,0 +1,11 @@
+POST logs-*/_eql/search
+{
+  "filter": {
+    "range": { "@timestamp": { "gte": "now-10d", "lt": "now" } }
+  },
+  "query": """
+    sequence by process_id
+      [ any where service == "A" and output_url == "https://url.com" ]
+      [ any where service == "B" and output_url == "https://url2.com" ]
+  """
+}
